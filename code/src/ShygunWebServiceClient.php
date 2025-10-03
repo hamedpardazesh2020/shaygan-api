@@ -86,6 +86,8 @@ class ShygunWebServiceClient
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $this->timeout);
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
+        curl_setopt($ch, CURLOPT_HEADER, true);
+        curl_setopt($ch, CURLINFO_HEADER_OUT, true);
         $defaultHeaders = array(
             'Content-Type: application/json',
         );
@@ -102,19 +104,114 @@ class ShygunWebServiceClient
         $errno = curl_errno($ch);
         $err   = curl_error($ch);
         $http  = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $requestHeaderString = curl_getinfo($ch, CURLINFO_HEADER_OUT);
+        $headerSize = 0;
+        $rawHeaders = '';
+        $bodyPart   = '';
+        $parsedHeaders = array();
+        if ($resp !== false) {
+            $headerSize = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+            $rawHeaders = substr($resp, 0, $headerSize);
+            $bodyPart   = substr($resp, $headerSize);
+            $parsedHeaders = $this->parseHeaders($rawHeaders);
+        }
         curl_close($ch);
 
         if ($errno) {
-            return array('ok' => false, 'status' => 0, 'error' => 'CURL error '.$errno.': '.$err, 'body' => null, 'url' => $url, 'request' => $json);
+            return array(
+                'ok' => false,
+                'status' => 0,
+                'error' => 'CURL error ' . $errno . ': ' . $err,
+                'body' => null,
+                'rawBody' => $bodyPart,
+                'url' => $url,
+                'request' => $json,
+                'requestHeaders' => $requestHeaderString,
+                'responseHeaders' => $parsedHeaders,
+                'rawResponseHeaders' => $rawHeaders,
+            );
         }
         if ($http < 200 || $http >= 300) {
-            return array('ok' => false, 'status' => $http, 'error' => 'HTTP '.$http.' body: '.$resp, 'body' => null, 'url' => $url, 'request' => $json);
+            return array(
+                'ok' => false,
+                'status' => $http,
+                'error' => 'HTTP ' . $http . ' body: ' . $bodyPart,
+                'body' => null,
+                'rawBody' => $bodyPart,
+                'url' => $url,
+                'request' => $json,
+                'requestHeaders' => $requestHeaderString,
+                'responseHeaders' => $parsedHeaders,
+                'rawResponseHeaders' => $rawHeaders,
+            );
         }
-        $body = json_decode($resp, true);
+        $body = json_decode($bodyPart, true);
         if ($body === null && json_last_error() !== JSON_ERROR_NONE) {
-            return array('ok' => false, 'status' => $http, 'error' => 'Invalid JSON response: '.json_last_error_msg(), 'body' => $resp, 'url' => $url, 'request' => $json);
+            return array(
+                'ok' => false,
+                'status' => $http,
+                'error' => 'Invalid JSON response: ' . json_last_error_msg(),
+                'body' => $bodyPart,
+                'rawBody' => $bodyPart,
+                'url' => $url,
+                'request' => $json,
+                'requestHeaders' => $requestHeaderString,
+                'responseHeaders' => $parsedHeaders,
+                'rawResponseHeaders' => $rawHeaders,
+            );
         }
-        return array('ok' => true, 'status' => $http, 'error' => null, 'body' => $body, 'url' => $url, 'request' => $json);
+        return array(
+            'ok' => true,
+            'status' => $http,
+            'error' => null,
+            'body' => $body,
+            'rawBody' => $bodyPart,
+            'url' => $url,
+            'request' => $json,
+            'requestHeaders' => $requestHeaderString,
+            'responseHeaders' => $parsedHeaders,
+            'rawResponseHeaders' => $rawHeaders,
+        );
+    }
+
+    /** Parse raw header string into associative array */
+    protected function parseHeaders($rawHeaders)
+    {
+        $headers = array();
+        if (!is_string($rawHeaders) || $rawHeaders === '') {
+            return $headers;
+        }
+        $blocks = preg_split('/\r\n\r\n|\n\n|\r\r/', trim($rawHeaders));
+        $lastBlock = array_pop($blocks);
+        if ($lastBlock === null) {
+            $lastBlock = '';
+        }
+        $lines = preg_split('/\r\n|\n|\r/', $lastBlock);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            if (strpos($line, ':') === false) {
+                $headers['Status-Line'] = $line;
+                continue;
+            }
+            $parts = explode(':', $line, 2);
+            $key = trim($parts[0]);
+            $value = trim($parts[1]);
+            if ($key === '') {
+                continue;
+            }
+            if (!isset($headers[$key])) {
+                $headers[$key] = $value;
+            } else {
+                if (!is_array($headers[$key])) {
+                    $headers[$key] = array($headers[$key]);
+                }
+                $headers[$key][] = $value;
+            }
+        }
+        return $headers;
     }
 
     /** ========== ABOUT ========== */
